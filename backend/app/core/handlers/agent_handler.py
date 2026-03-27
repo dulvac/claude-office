@@ -73,16 +73,17 @@ async def handle_subagent_start(
     )
 
     if agent_id in sm.agents:
-        await enrich_agent_with_summaries(sm.agents[agent_id], event.data)
-        # Propagate enriched short name to the lifespan record.
-        enriched_name = sm.agents[agent_id].name
-        if enriched_name:
-            for lifespan in sm.agent_lifespans:
-                if lifespan.agent_id == agent_id:
-                    lifespan.agent_name = enriched_name
-                    break
-
-    await broadcast_state(event.session_id, sm)
+        agent = sm.agents[agent_id]
+        # Skip AI name enrichment for teammates — they use their teammate_name directly
+        if not agent.is_teammate:
+            await enrich_agent_with_summaries(agent, event.data)
+            # Propagate enriched short name to the lifespan record.
+            enriched_name = agent.name
+            if enriched_name:
+                for lifespan in sm.agent_lifespans:
+                    if lifespan.agent_id == agent_id:
+                        lifespan.agent_name = enriched_name
+                        break
 
     sm.boss_state = BossState.DELEGATING
 
@@ -93,7 +94,12 @@ async def handle_subagent_start(
         if poller:
             await poller.start_polling(agent_id, event.session_id, transcript_path)
 
-    await update_agent_state_fn(event.session_id, agent_id, AgentState.WALKING_TO_DESK)
+    # Teammates: set to WORKING directly since the frontend handles the
+    # elevator-to-desk walk animation independently.
+    # Regular subagents: set to WALKING_TO_DESK for the queue choreography.
+    is_teammate = agent_id in sm.agents and sm.agents[agent_id].is_teammate
+    target_state = AgentState.WORKING if is_teammate else AgentState.WALKING_TO_DESK
+    await update_agent_state_fn(event.session_id, agent_id, target_state)
     sm.boss_state = BossState.IDLE
     await broadcast_state(event.session_id, sm)
 

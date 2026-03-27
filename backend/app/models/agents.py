@@ -8,6 +8,7 @@ from app.models.common import BubbleContent
 __all__ = [
     "AgentState",
     "BossState",
+    "DeskSubagent",
     "Agent",
     "Boss",
     "ElevatorState",
@@ -46,6 +47,17 @@ class BossState(StrEnum):
     COMPLETING = "completing"
 
 
+class DeskSubagent(BaseModel):
+    """A subagent spawned by a teammate, shown as an indicator at their desk."""
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    id: str
+    name: str | None = None
+    tool_name: str | None = None
+    state: str  # "working" | "completed"
+
+
 class Agent(BaseModel):
     """Represents a subagent in the office visualization."""
 
@@ -61,6 +73,8 @@ class Agent(BaseModel):
     bubble: BubbleContent | None = None
     current_task: str | None = None
     position: dict[str, int] = {"x": 0, "y": 0}
+    is_teammate: bool = False
+    desk_subagents: list[DeskSubagent] = []
 
 
 class Boss(BaseModel):

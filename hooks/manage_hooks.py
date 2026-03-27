@@ -18,6 +18,8 @@ HOOK_TYPES = [
     "SubagentStart",
     "SubagentStop",
     "PreCompact",
+    "TeammateIdle",
+    "TaskCompleted",
 ]
 
 

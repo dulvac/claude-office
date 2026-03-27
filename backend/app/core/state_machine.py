@@ -1,10 +1,11 @@
+import contextlib
 import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, auto
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 from app.config import get_settings
 from app.core.path_utils import compress_path, compress_paths_in_text, truncate_long_words
@@ -145,7 +146,13 @@ class StateMachine:
     """Manages office state and processes events to track agents, boss, and office elements."""
 
     MAX_AGENTS = 8
-    MAX_CONTEXT_TOKENS = 200_000
+    DEFAULT_CONTEXT_TOKENS = 200_000
+
+    # Model ID substring → context window size
+    MODEL_CONTEXT_SIZES: ClassVar[dict[str, int]] = {
+        "1m": 1_000_000,
+        "1M": 1_000_000,
+    }
 
     phase: OfficePhase = OfficePhase.EMPTY
     boss_state: BossState = BossState.IDLE
@@ -157,6 +164,7 @@ class StateMachine:
     handin_queue: list[str] = field(default_factory=_empty_str_list)
     history: list[HistoryEntry] = field(default_factory=_empty_history_list)
     todos: list[TodoItem] = field(default_factory=_empty_todo_list)
+    max_context_tokens: int = DEFAULT_CONTEXT_TOKENS
     total_input_tokens: int = 0
     total_output_tokens: int = 0
     tool_uses_since_compaction: int = 0
@@ -164,6 +172,10 @@ class StateMachine:
     last_user_prompt: str | None = None
     background_tasks: list[BackgroundTask] = field(default_factory=_empty_background_tasks)
     conversation: list[ConversationEntry] = field(default_factory=_empty_conversation)
+
+    # Agent Teams
+    team_name: str | None = None
+    teammate_agents: set[str] = field(default_factory=lambda: cast(set[str], set()))
 
     # Whiteboard tracking delegated to WhiteboardTracker
     whiteboard: WhiteboardTracker = field(default_factory=WhiteboardTracker)
@@ -286,7 +298,7 @@ class StateMachine:
         agents_list: list[Agent] = list(self.agents.values())
 
         total_tokens = self.total_input_tokens + self.total_output_tokens
-        context_utilization = min(1.0, total_tokens / self.MAX_CONTEXT_TOKENS)
+        context_utilization = min(1.0, total_tokens / self.max_context_tokens)
 
         office = OfficeState(
             desk_count=desk_count,
@@ -375,10 +387,14 @@ class StateMachine:
                                 + int(usage_dict.get("cache_read_input_tokens", 0) or 0)
                             )
                             output_tokens: int = int(usage_dict.get("output_tokens", 0) or 0)
-                            return {
+                            result: dict[str, Any] = {
                                 "input_tokens": input_tokens,
                                 "output_tokens": output_tokens,
                             }
+                            model = message.get("model")
+                            if model and isinstance(model, str):
+                                result["model"] = model
+                            return result
                 except (json.JSONDecodeError, KeyError):
                     continue
 
@@ -461,6 +477,18 @@ class StateMachine:
 
         return None
 
+    def _set_context_size_from_model(self, model: str) -> None:
+        """Set max context tokens based on model ID."""
+        for substring, size in self.MODEL_CONTEXT_SIZES.items():
+            if substring in model:
+                self.max_context_tokens = size
+                logger.info(f"Context window set to {size:,} tokens for model {model}")
+                return
+        self.max_context_tokens = self.DEFAULT_CONTEXT_TOKENS
+        logger.info(
+            f"Using default context window {self.DEFAULT_CONTEXT_TOKENS:,} tokens for model {model}"
+        )
+
     def _update_token_usage(self, event: Event) -> None:
         """Update token counts from event data or JSONL transcript."""
         if not event.data:
@@ -472,8 +500,8 @@ class StateMachine:
             if event.data.output_tokens is not None:
                 self.total_output_tokens = event.data.output_tokens
             total = self.total_input_tokens + self.total_output_tokens
-            util = min(1.0, total / self.MAX_CONTEXT_TOKENS)
-            logger.info(f"Context: {util:.1%} ({total:,}/{self.MAX_CONTEXT_TOKENS:,} tokens)")
+            util = min(1.0, total / self.max_context_tokens)
+            logger.info(f"Context: {util:.1%} ({total:,}/{self.max_context_tokens:,} tokens)")
             return
 
         transcript_path = event.data.transcript_path or event.data.agent_transcript_path
@@ -487,9 +515,12 @@ class StateMachine:
 
         self.total_input_tokens = usage["input_tokens"]
         self.total_output_tokens = usage["output_tokens"]
+        # Pick up model from transcript if not already set
+        if "model" in usage and self.max_context_tokens == self.DEFAULT_CONTEXT_TOKENS:
+            self._set_context_size_from_model(usage["model"])
         total = self.total_input_tokens + self.total_output_tokens
-        util = min(1.0, total / self.MAX_CONTEXT_TOKENS)
-        logger.info(f"Context: {util:.1%} ({total:,}/{self.MAX_CONTEXT_TOKENS:,} tokens)")
+        util = min(1.0, total / self.max_context_tokens)
+        logger.info(f"Context: {util:.1%} ({total:,}/{self.max_context_tokens:,} tokens)")
 
     def transition(self, event: Event) -> None:
         """Process an event and update state accordingly."""
@@ -500,6 +531,9 @@ class StateMachine:
             self.boss_state = BossState.IDLE
             self.whiteboard.reset()
             self.whiteboard.add_news_item("session", "New session started - ready for work!")
+            # Set context window size from model ID
+            if event.data and event.data.model:
+                self._set_context_size_from_model(event.data.model)
 
         elif event.event_type == EventType.CONTEXT_COMPACTION:
             self.tool_uses_since_compaction = 0
@@ -514,6 +548,12 @@ class StateMachine:
 
             if tool_name == "TodoWrite":
                 self._parse_todo_write(event)
+
+            if tool_name == "TaskCreate":
+                self._parse_task_create(event)
+
+            if tool_name == "TaskUpdate":
+                self._parse_task_update(event)
 
             if tool_name in ("Task", "Agent"):
                 # Spawning a subagent (Claude Code may use "Task" or "Agent")
@@ -605,6 +645,9 @@ class StateMachine:
                 self.whiteboard.record_agent_start(agent.id, short_name, agent.color)
                 self.whiteboard.add_news_item("agent", f"{short_name} joins the team!")
 
+                # Note: Teammates don't add todos on start — their actual tasks
+                # come from TASK_COMPLETED events with meaningful subjects.
+
         elif event.event_type == EventType.SUBAGENT_STOP:
             if event.data:
                 # Use shared resolution logic with fallback linking
@@ -683,6 +726,80 @@ class StateMachine:
                 headline = f"{status_emoji} Task {task_id_short}: {summary_short or status}"
                 self.whiteboard.add_news_item("agent", headline)
 
+        elif event.event_type == EventType.TEAMMATE_MESSAGE:
+            if event.data:
+                sender_id = event.data.agent_id
+                recipient_name = event.data.message_to
+                message_text = event.data.message_text or ""
+                display_text = message_text[:40] + "..." if len(message_text) > 40 else message_text
+
+                if sender_id == "main":
+                    # Boss is sending the message
+                    self.boss_bubble = BubbleContent(
+                        type=BubbleType.SPEECH,
+                        text=display_text,
+                        icon="💬",
+                    )
+                elif sender_id and sender_id in self.agents:
+                    self.agents[sender_id].bubble = BubbleContent(
+                        type=BubbleType.SPEECH,
+                        text=display_text,
+                        icon="💬",
+                    )
+
+                if recipient_name:
+                    recipient_id = self.find_agent_by_teammate_name(recipient_name)
+                    sender_name = (
+                        "Team Lead"
+                        if sender_id == "main"
+                        else (self.agents[sender_id].name or sender_id)
+                        if sender_id and sender_id in self.agents
+                        else (event.data.teammate_name or "someone")
+                    )
+                    if recipient_id and recipient_id in self.agents:
+                        self.agents[recipient_id].bubble = BubbleContent(
+                            type=BubbleType.THOUGHT,
+                            text=f"Listening to {sender_name}...",
+                            icon="👂",
+                        )
+
+        elif event.event_type == EventType.TEAMMATE_IDLE:
+            if event.data and event.data.teammate_name:
+                agent_id = self.find_agent_by_teammate_name(event.data.teammate_name)
+                if agent_id and agent_id in self.agents:
+                    self.agents[agent_id].state = AgentState.WAITING
+
+        elif event.event_type == EventType.TASK_COMPLETED:
+            if event.data:
+                task_subject = event.data.task_subject or "a task"
+                teammate = event.data.teammate_name or "Someone"
+                task_id = event.data.task_id or ""
+                self.whiteboard.task_completed_count += 1
+                self.whiteboard.add_news_item("agent", f"{teammate} completed: {task_subject}")
+
+                # Update or add to the todo list so the task panel shows team tasks.
+                # Try matching by task_id index first, then by subject text.
+                found = False
+                idx = int(task_id) - 1 if task_id.isdigit() else -1
+                if 0 <= idx < len(self.todos):
+                    self.todos[idx].status = TodoStatus.COMPLETED
+                    found = True
+                else:
+                    for todo in self.todos:
+                        if todo.content == task_subject:
+                            todo.status = TodoStatus.COMPLETED
+                            found = True
+                            break
+                if not found:
+                    self.todos.append(TodoItem(content=task_subject, status=TodoStatus.COMPLETED))
+
+    def find_agent_by_teammate_name(self, name: str) -> str | None:
+        """Find an agent ID by teammate name."""
+        for agent_id, agent in self.agents.items():
+            if agent.name == name and agent_id in self.teammate_agents:
+                return agent_id
+        return None
+
     def _tool_to_thought(self, event: Event) -> BubbleContent:
         """Convert a tool use event to thought bubble content."""
         tool_icons = {
@@ -741,10 +858,16 @@ class StateMachine:
         ]
         color = colors[(count - 1) % len(colors)]
 
-        # Generate short name from description using fallback
-        name_source = data.agent_name or data.task_description or ""
-        summary_service = get_summary_service()
-        short_name = summary_service.generate_agent_name_fallback(name_source)
+        is_teammate = bool(data.is_teammate) if data.is_teammate is not None else False
+
+        # Teammates use their teammate_name directly (e.g., "researcher", "architect").
+        # Regular subagents get an AI-generated short name.
+        if is_teammate and data.teammate_name:
+            short_name = data.teammate_name
+        else:
+            name_source = data.agent_name or data.task_description or ""
+            summary_service = get_summary_service()
+            short_name = summary_service.generate_agent_name_fallback(name_source)
 
         return Agent(
             id=agent_id,
@@ -755,6 +878,7 @@ class StateMachine:
             desk=count,
             bubble=None,
             current_task=data.task_description,
+            is_teammate=is_teammate,
         )
 
     def _parse_todo_write(self, event: Event) -> None:
@@ -790,3 +914,47 @@ class StateMachine:
                 new_todos.append(TodoItem(content=content, status=status, active_form=active_form))
 
         self.todos = new_todos
+
+    def _parse_task_create(self, event: Event) -> None:
+        """Parse TaskCreate tool input and add a pending task to the todo list."""
+        if not event.data or not event.data.tool_input:
+            return
+
+        tool_input = event.data.tool_input
+        subject = str(tool_input.get("subject", ""))
+        active_form = tool_input.get("activeForm")
+
+        if subject:
+            self.todos.append(
+                TodoItem(
+                    content=subject,
+                    status=TodoStatus.PENDING,
+                    active_form=str(active_form) if active_form else None,
+                )
+            )
+
+    def _parse_task_update(self, event: Event) -> None:
+        """Parse TaskUpdate tool input and update task status in the todo list."""
+        if not event.data or not event.data.tool_input:
+            return
+
+        tool_input = event.data.tool_input
+        task_id = str(tool_input.get("taskId", ""))
+        new_status = str(tool_input.get("status", ""))
+        new_subject = tool_input.get("subject")
+        owner = tool_input.get("owner")
+
+        if not task_id:
+            return
+
+        # Match by index (taskId is 1-based) or by content
+        idx = int(task_id) - 1 if task_id.isdigit() else -1
+        if 0 <= idx < len(self.todos):
+            todo = self.todos[idx]
+            if new_status:
+                with contextlib.suppress(ValueError):
+                    todo.status = TodoStatus(new_status)
+            if new_subject:
+                todo.content = str(new_subject)
+            if owner:
+                todo.active_form = str(owner)

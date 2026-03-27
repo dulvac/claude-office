@@ -70,6 +70,7 @@ export function HeatMapMode({ data }: HeatMapModeProps): ReactNode {
             x={140}
             y={2}
             draw={(g: Graphics) => {
+              if (!g) return;
               g.clear();
               const width = (count / maxEdits) * 120;
               g.roundRect(0, 0, width, 14, 2);

@@ -205,6 +205,29 @@ export function AgentStatus() {
                     In {agent.queueType} queue (position {agent.queueIndex + 1})
                   </div>
                 )}
+
+                {/* Desk subagents (for teammates) */}
+                {agent.deskSubagents.length > 0 && (
+                  <div className="pt-1 border-t border-slate-800/50 mt-1 space-y-0.5">
+                    {agent.deskSubagents.map((sub) => (
+                      <div
+                        key={sub.id}
+                        className="flex items-center gap-1.5"
+                      >
+                        <span
+                          className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                            sub.state === "working"
+                              ? "bg-amber-400 animate-pulse"
+                              : "bg-emerald-400"
+                          }`}
+                        />
+                        <span className="text-[10px] text-slate-300 truncate">
+                          {sub.name || sub.id.slice(0, 8)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           ))

@@ -481,6 +481,7 @@ export function OfficeGame(): ReactNode {
                     bubble={boss.bubble.content}
                     inUseBy={boss.inUseBy}
                     currentTask={boss.currentTask}
+                    label={Array.from(agents.values()).some((a) => a.isTeammate) ? "Team Lead" : "Claude"}
                     chairTexture={textures.chair}
                     deskTexture={textures.desk}
                     keyboardTexture={textures.keyboard}
@@ -552,6 +553,7 @@ export function OfficeGame(): ReactNode {
                         key={`label-${agent.id}`}
                         name={agent.name!}
                         position={agent.currentPosition}
+                        deskSubagentCount={agent.deskSubagents.length}
                       />
                     ))}
 

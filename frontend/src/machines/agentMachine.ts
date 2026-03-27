@@ -156,29 +156,17 @@ export const createAgentMachine = (actions: AgentMachineActions) =>
           },
 
           conversing: {
-            initial: "boss_speaks",
             entry: [
               { type: "notifyPhaseChange", params: { phase: "conversing" } },
-              "resetConversationStep",
+              "showArrivalBossBubble",
+              "showArrivalAgentBubble",
             ],
-            states: {
-              boss_speaks: {
-                entry: ["clearBossBubble", "showArrivalBossBubble"],
-                on: {
-                  BUBBLE_DISPLAYED: "agent_responds",
-                },
-              },
-              agent_responds: {
-                entry: ["incrementConversationStep", "showArrivalAgentBubble"],
-                after: {
-                  800: "done",
-                },
-              },
-              done: {
-                type: "final",
-              },
+            after: {
+              // Pure timer: show bubbles and advance after fixed delay.
+              // No dependency on BUBBLE_DISPLAYED which can be blocked by
+              // backend state broadcasts overwriting boss bubbles.
+              1200: "walking_to_boss",
             },
-            onDone: "walking_to_boss",
           },
 
           walking_to_boss: {
@@ -276,29 +264,14 @@ export const createAgentMachine = (actions: AgentMachineActions) =>
           },
 
           conversing: {
-            initial: "agent_speaks",
             entry: [
               { type: "notifyPhaseChange", params: { phase: "conversing" } },
-              "resetConversationStep",
+              "showDepartureAgentBubble",
+              "showDepartureBossBubble",
             ],
-            states: {
-              agent_speaks: {
-                entry: ["clearBossBubble", "showDepartureAgentBubble"],
-                on: {
-                  BUBBLE_DISPLAYED: "boss_responds",
-                },
-              },
-              boss_responds: {
-                entry: ["incrementConversationStep", "showDepartureBossBubble"],
-                on: {
-                  BUBBLE_DISPLAYED: "done",
-                },
-              },
-              done: {
-                type: "final",
-              },
+            after: {
+              1200: "walking_to_boss",
             },
-            onDone: "walking_to_boss",
           },
 
           walking_to_boss: {

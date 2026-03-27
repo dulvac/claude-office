@@ -8,7 +8,11 @@
 import React, { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { useGameStore, selectConversation } from "@/stores/gameStore";
+import {
+  useGameStore,
+  selectConversation,
+  selectConversationFilter,
+} from "@/stores/gameStore";
 import { format } from "date-fns";
 import {
   MessageSquare,
@@ -86,6 +90,47 @@ function ToolEntry({ entry }: { entry: ConversationEntry }) {
         {getToolIcon(entry.toolName)} {entry.toolName}
       </span>
       <span className="text-slate-400 text-[10px] truncate">{entry.text}</span>
+    </div>
+  );
+}
+
+function TeamMessageEntry({ entry }: { entry: ConversationEntry }) {
+  const senderName =
+    (entry as Record<string, unknown>).agentName ?? entry.agentId;
+  const recipientName =
+    (entry as Record<string, unknown>).recipientName ?? "unknown";
+  const senderColor =
+    ((entry as Record<string, unknown>).agentColor as string) ?? "#888";
+
+  return (
+    <div className="flex items-start gap-2 px-2 py-1.5 rounded-lg bg-purple-950/30 border border-purple-800/30">
+      <MessageSquare
+        size={12}
+        className="text-purple-400 flex-shrink-0 mt-0.5"
+      />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5 mb-0.5">
+          <span
+            className="text-[9px] font-bold uppercase tracking-wider px-1 py-0.5 rounded"
+            style={{
+              color: senderColor,
+              backgroundColor: `${senderColor}20`,
+            }}
+          >
+            {String(senderName)}
+          </span>
+          <span className="text-purple-500 text-[9px]">→</span>
+          <span className="text-[9px] font-bold uppercase tracking-wider text-purple-400">
+            {String(recipientName)}
+          </span>
+        </div>
+        <p className="text-purple-200/80 text-[11px] leading-relaxed whitespace-pre-wrap break-words">
+          {entry.text}
+        </p>
+        <div className="text-slate-600 text-[10px] mt-0.5">
+          {format(new Date(entry.timestamp), "HH:mm:ss")}
+        </div>
+      </div>
     </div>
   );
 }
@@ -249,6 +294,8 @@ function ConversationEntries({
             return <ThinkingEntry key={entry.id} entry={entry} />;
           case "tool":
             return <ToolEntry key={entry.id} entry={entry} />;
+          case "team_message":
+            return <TeamMessageEntry key={entry.id} entry={entry} />;
           default:
             return null;
         }
@@ -260,18 +307,39 @@ function ConversationEntries({
 
 export function ConversationHistory() {
   const conversation = useGameStore(selectConversation);
+  const conversationFilter = useGameStore(selectConversationFilter);
+  const setConversationFilter = useGameStore.getState().setConversationFilter;
+  const agents = useGameStore((s) => s.agents);
   const bottomRef = useRef<HTMLDivElement>(null);
   const modalBottomRef = useRef<HTMLDivElement>(null);
   const [showTools, setShowTools] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
+  // Build filter options from agents that are teammates
+  const teammateOptions = Array.from(agents.values())
+    .filter((a) => a.backendState !== undefined)
+    .map((a) => ({ id: a.id, name: a.name ?? a.id }));
+
   const toolCount = conversation.filter((e) => e.role === "tool").length;
   const messageCount = conversation.filter(
     (e) => e.role === "user" || e.role === "assistant",
   ).length;
-  const visible = showTools
+  const afterToolFilter = showTools
     ? conversation
     : conversation.filter((e) => e.role !== "tool");
+
+  // Apply agent filter
+  const visible = conversationFilter
+    ? afterToolFilter.filter((e) => {
+        if (conversationFilter === "boss") {
+          return e.agentId === "main" || !e.agentId;
+        }
+        return (
+          e.agentId === conversationFilter ||
+          (e as Record<string, unknown>).recipientId === conversationFilter
+        );
+      })
+    : afterToolFilter;
 
   // Auto-scroll to bottom on new entries
   useEffect(() => {
@@ -314,6 +382,25 @@ export function ConversationHistory() {
           <Wrench size={9} />
           {toolCount}
         </button>
+        {teammateOptions.length > 0 && (
+          <select
+            value={conversationFilter ?? "all"}
+            onChange={(e) =>
+              setConversationFilter(
+                e.target.value === "all" ? null : e.target.value,
+              )
+            }
+            className="bg-slate-800 border border-slate-700 rounded text-[10px] text-slate-300 px-1 py-0.5"
+          >
+            <option value="all">All</option>
+            <option value="boss">Team Lead</option>
+            {teammateOptions.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+              </option>
+            ))}
+          </select>
+        )}
         {onExpand ? (
           <button
             onClick={onExpand}

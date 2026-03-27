@@ -97,7 +97,13 @@ export interface EventDetail {
   errorType?: string;
   taskDescription?: string;
   agentName?: string;
+  agentColor?: string;
   prompt?: string;
+  // Agent Teams message fields
+  recipientId?: string;
+  recipientName?: string;
+  messageTo?: string;
+  messageText?: string;
 }
 
 /**

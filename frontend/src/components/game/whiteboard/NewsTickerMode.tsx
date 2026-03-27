@@ -63,6 +63,7 @@ export function NewsTickerMode({ data }: NewsTickerModeProps): ReactNode {
       {/* Breaking banner */}
       <pixiGraphics
         draw={(g: Graphics) => {
+          if (!g) return;
           g.clear();
           g.rect(16, 5, 90, 18);
           g.fill(0xef4444);

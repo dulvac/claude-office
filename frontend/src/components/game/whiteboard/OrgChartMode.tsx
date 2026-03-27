@@ -33,6 +33,7 @@ export function OrgChartMode({
 }: OrgChartModeProps): ReactNode {
   const drawOrgChart = useCallback(
     (g: Graphics) => {
+      if (!g) return;
       g.clear();
 
       // Boss box
@@ -109,6 +110,7 @@ export function OrgChartMode({
             <pixiContainer key={agent.id} x={x} y={66}>
               <pixiGraphics
                 draw={(g: Graphics) => {
+                  if (!g) return;
                   g.clear();
                   g.roundRect(-boxWidth / 2, 0, boxWidth, 40, 3);
                   g.fill(0xffffff);

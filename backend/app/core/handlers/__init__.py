@@ -29,6 +29,7 @@ from app.core.handlers.session_handler import (
     handle_session_end,
     handle_session_start,
 )
+from app.core.handlers.team_handler import route_teammate_event
 from app.core.handlers.tool_handler import handle_pre_tool_use
 
 __all__ = [
@@ -52,4 +53,6 @@ __all__ = [
     "handle_stop",
     "extract_and_set_boss_speech",
     "detect_and_set_print_report",
+    # team
+    "route_teammate_event",
 ]

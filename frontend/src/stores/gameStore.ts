@@ -90,6 +90,10 @@ export interface AgentAnimationState {
 
   // Animation state
   isTyping: boolean; // True when agent is actively using tools
+
+  // Team data
+  isTeammate: boolean;
+  deskSubagents: { id: string; name: string | null; toolName: string | null; state: string }[];
 }
 
 /**
@@ -151,6 +155,7 @@ interface GameStore {
       backendState: BackendAgentState;
       name: string | null;
       currentTask: string | null;
+      deskSubagents?: { id: string; name: string | null; toolName: string | null; state: string }[];
     },
   ) => void;
   updateAgentQueueInfo: (
@@ -223,6 +228,8 @@ interface GameStore {
   addEventLog: (event: NonNullable<WebSocketMessage["event"]>) => void;
   conversation: ConversationEntry[];
   setConversation: (conversation: ConversationEntry[]) => void;
+  conversationFilter: string | null;
+  setConversationFilter: (filter: string | null) => void;
 
   // Whiteboard actions
   whiteboardData: WhiteboardData;
@@ -367,6 +374,7 @@ const initialState = {
   gitStatus: null as GitStatus | null,
   eventLog: [] as EventLogEntry[],
   conversation: [] as ConversationEntry[],
+  conversationFilter: null as string | null,
 
   // Whiteboard
   whiteboardData: initialWhiteboardData,
@@ -418,6 +426,13 @@ export const useGameStore = create<GameStore>()(
           queueType: null,
           queueIndex: -1,
           isTyping: false,
+          isTeammate: backendAgent.isTeammate ?? false,
+          deskSubagents: (backendAgent.deskSubagents ?? []).map((s) => ({
+            id: s.id,
+            name: s.name ?? null,
+            toolName: s.toolName ?? null,
+            state: s.state,
+          })),
         };
         newAgents.set(backendAgent.id, animState);
 
@@ -511,6 +526,7 @@ export const useGameStore = create<GameStore>()(
           backendState: meta.backendState,
           name: meta.name ?? agent.name,
           currentTask: meta.currentTask ?? agent.currentTask,
+          deskSubagents: meta.deskSubagents ?? agent.deskSubagents,
         });
         return { agents: newAgents };
       }),
@@ -932,6 +948,7 @@ export const useGameStore = create<GameStore>()(
       }),
 
     setConversation: (conversation) => set({ conversation }),
+    setConversationFilter: (filter) => set({ conversationFilter: filter }),
 
     // ========================================================================
     // WHITEBOARD ACTIONS
@@ -1196,3 +1213,5 @@ export const selectPrintReport = (state: GameStore) => state.printReport;
 export const selectWhiteboardData = (state: GameStore) => state.whiteboardData;
 export const selectWhiteboardMode = (state: GameStore) => state.whiteboardMode;
 export const selectConversation = (state: GameStore) => state.conversation;
+export const selectConversationFilter = (state: GameStore) =>
+  state.conversationFilter;

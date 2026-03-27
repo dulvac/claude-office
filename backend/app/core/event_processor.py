@@ -18,6 +18,7 @@ from typing import Any
 from sqlalchemy import delete, select
 
 from app.config import get_settings
+from app.core.beads_poller import get_beads_poller, has_beads, init_beads_poller
 from app.core.broadcast_service import broadcast_error, broadcast_event, broadcast_state
 from app.core.handlers import (
     enrich_agent_from_transcript,
@@ -31,12 +32,13 @@ from app.core.handlers import (
     handle_subagent_start,
     handle_subagent_stop,
     handle_user_prompt_submit,
+    route_teammate_event,
 )
 from app.core.jsonl_parser import get_last_assistant_response
 from app.core.state_machine import StateMachine
-from app.core.beads_poller import get_beads_poller, has_beads, init_beads_poller
 from app.core.task_file_poller import init_task_file_poller
 from app.core.task_persistence import load_tasks, save_tasks
+from app.core.team_registry import TeamRegistry
 from app.core.transcript_poller import init_transcript_poller
 from app.db.database import AsyncSessionLocal
 from app.db.models import EventRecord, SessionRecord
@@ -97,6 +99,7 @@ class EventProcessor:
 
     def __init__(self) -> None:
         self.sessions: dict[str, StateMachine] = {}
+        self.team_registry = TeamRegistry()
         self._sessions_lock = asyncio.Lock()
         self._transcript_poller_initialized = False
         self._task_poller_initialized = False
@@ -234,7 +237,208 @@ class EventProcessor:
 
     async def _process_event_internal(self, event: Event) -> None:
         """Persist, update state machine, build history entry, delegate to handlers."""
-        await self._persist_event(event)
+
+        # ------------------------------------------------------------------
+        # Agent Teams routing: correlate teammate events to lead's session.
+        # This runs BEFORE persist so teammate events are stored under the
+        # lead's session_id, not their own (avoiding phantom sessions).
+        # ------------------------------------------------------------------
+        team_name = event.data.team_name if event.data else None
+        teammate_name = event.data.teammate_name if event.data else None
+
+        # ------------------------------------------------------------------
+        # Late discovery: TeammateIdle/TaskCompleted reveal which session is
+        # a teammate. Register the mapping so future events from this
+        # session_id get routed to the lead.
+        # ------------------------------------------------------------------
+        if (
+            event.event_type in (EventType.TEAMMATE_IDLE, EventType.TASK_COMPLETED)
+            and team_name
+            and teammate_name
+            and not self.team_registry.is_teammate_session(event.session_id)
+        ):
+            self.team_registry.register_teammate(team_name, teammate_name, event.session_id)
+            # Find the lead: the oldest session with the same project that
+            # isn't a registered teammate.
+            if not self.team_registry.get_lead_session(team_name):
+                for sid in self.sessions:
+                    if sid == event.session_id:
+                        continue
+                    if not self.team_registry.is_teammate_session(sid):
+                        # Check if same project by looking at DB
+                        project_root = await self.get_project_root(sid)
+                        event_project_root = await self.get_project_root(event.session_id)
+                        if (
+                            project_root
+                            and event_project_root
+                            and project_root == event_project_root
+                        ):
+                            self.team_registry.register_lead(team_name, sid)
+                            logger.info(
+                                f"Late-discovered team lead: team={team_name} session={sid}"
+                            )
+                            break
+            # Create the teammate agent in the lead's office
+            lead_session_id = self.team_registry.get_lead_session(team_name)
+            if lead_session_id and lead_session_id in self.sessions:
+                lead_sm = self.sessions[lead_session_id]
+                agent_id = self.team_registry.get_agent_id(team_name, teammate_name)
+                if agent_id and agent_id not in lead_sm.agents:
+                    synthetic_start = Event(
+                        event_type=EventType.SUBAGENT_START,
+                        session_id=lead_session_id,
+                        timestamp=event.timestamp,
+                        data=EventData(
+                            agent_id=agent_id,
+                            agent_name=teammate_name,
+                            task_description=f"Team member: {teammate_name}",
+                            team_name=team_name,
+                            teammate_name=teammate_name,
+                            is_teammate=True,
+                        ),
+                    )
+                    lead_sm.transition(synthetic_start)
+                    lead_sm.teammate_agents.add(agent_id)
+                    if agent_id in lead_sm.agents:
+                        lead_sm.agents[agent_id].state = AgentState.WORKING
+                    if agent_id in lead_sm.arrival_queue:
+                        lead_sm.arrival_queue.remove(agent_id)
+                    await broadcast_state(lead_session_id, lead_sm)
+                    logger.info(
+                        f"Late-created teammate agent: {agent_id} in lead session {lead_session_id}"
+                    )
+
+        # ------------------------------------------------------------------
+        # Inject team context for sessions previously identified as teammates
+        # (regular hooks like PreToolUse don't include team_name/teammate_name)
+        # ------------------------------------------------------------------
+        if not team_name and self.team_registry.is_teammate_session(event.session_id):
+            team_name = self.team_registry.get_team_name_by_session(event.session_id)
+            teammate_name = self.team_registry.get_teammate_name_by_session(event.session_id)
+            if event.data and team_name and teammate_name:
+                event.data.team_name = team_name
+                event.data.teammate_name = teammate_name
+
+        # Try to match new sessions to pre-registered pending teammates
+        if not team_name and event.event_type == EventType.SESSION_START:
+            match = self.team_registry.try_match_pending_teammate(event.session_id)
+            if match:
+                team_name, teammate_name = match
+                if event.data:
+                    event.data.team_name = team_name
+                    event.data.teammate_name = teammate_name
+
+        # ------------------------------------------------------------------
+        # Lead spawning a teammate: SUBAGENT_START from lead with team_name.
+        # Register the lead and pre-register the expected teammate.
+        # ------------------------------------------------------------------
+        if (
+            team_name
+            and teammate_name
+            and event.event_type == EventType.SUBAGENT_START
+            and not self.team_registry.is_teammate_session(event.session_id)
+        ):
+            # This is the lead's session spawning a teammate
+            if not self.team_registry.get_lead_session(team_name):
+                self.team_registry.register_lead(team_name, event.session_id)
+            # Pre-register teammate (no session_id yet — will be filled on SessionStart)
+            self.team_registry.register_teammate(
+                team_name, teammate_name, f"pending_{teammate_name}"
+            )
+            logger.info(f"Lead spawning teammate: {teammate_name} in team {team_name}")
+            # Don't process this as a normal subagent — it's a teammate spawn
+            # The teammate will appear when their SessionStart arrives
+            return
+
+        if team_name and teammate_name:
+            # This is a teammate event — register and route
+            if event.event_type == EventType.SESSION_START:
+                self.team_registry.register_teammate(team_name, teammate_name, event.session_id)
+
+            lead_session_id = self.team_registry.get_lead_session(team_name)
+            if not lead_session_id:
+                # Lead hasn't started yet — queue for later (don't persist yet)
+                self.team_registry.queue_pending_event(team_name, event)
+                return
+
+            # Ensure lead's StateMachine exists
+            if lead_session_id not in self.sessions:
+                await self._restore_session(lead_session_id)
+            if lead_session_id not in self.sessions:
+                self.sessions[lead_session_id] = StateMachine()
+
+            sm = self.sessions[lead_session_id]
+            rewritten = route_teammate_event(event, self.team_registry, sm)
+            if rewritten:
+                # Mark teammate agents
+                if rewritten.event_type == EventType.SUBAGENT_START and rewritten.data.is_teammate:
+                    sm.teammate_agents.add(rewritten.data.agent_id or "")
+                event = rewritten
+            else:
+                # Event handled internally (desk subagent) or needs queuing
+                await broadcast_state(lead_session_id, sm)
+                return
+
+        elif team_name and not teammate_name:
+            # This is the lead — register and flush pending events
+            if event.event_type == EventType.SESSION_START:
+                self.team_registry.register_lead(team_name, event.session_id)
+
+                # Persist the lead event first so the session exists for flushed events
+                await self._persist_event(event)
+
+                # Flush any queued teammate events
+                pending = self.team_registry.flush_pending_events(team_name)
+                for pending_event in pending:
+                    await self._process_event_internal(pending_event)
+
+                # Lead SESSION_START already persisted above — skip duplicate
+                # Fall through to normal processing (session restore, transition, etc.)
+
+            # Lead's SendMessage → generate TEAMMATE_MESSAGE
+            if (
+                event.event_type == EventType.PRE_TOOL_USE
+                and event.data
+                and event.data.tool_name == "SendMessage"
+            ):
+                tool_input = event.data.tool_input or {}
+                recipient = tool_input.get("to", "")
+                message_text = str(
+                    tool_input.get("message")
+                    or tool_input.get("content")
+                    or tool_input.get("text")
+                    or tool_input.get("prompt", "")
+                )
+
+                # Ensure lead SM exists for name resolution
+                if event.session_id not in self.sessions:
+                    await self._restore_session(event.session_id)
+                if event.session_id not in self.sessions:
+                    self.sessions[event.session_id] = StateMachine()
+
+                synthetic_msg = Event(
+                    event_type=EventType.TEAMMATE_MESSAGE,
+                    session_id=event.session_id,
+                    timestamp=event.timestamp,
+                    data=EventData(
+                        agent_id="main",
+                        # Don't set teammate_name — that would cause the team
+                        # routing to treat this as a teammate event. The lead's
+                        # messages go through normal processing.
+                        team_name=team_name,
+                        message_to=recipient,
+                        message_text=message_text,
+                    ),
+                )
+                await self._process_event_internal(synthetic_msg)
+                # Don't process the original PRE_TOOL_USE — it would overwrite
+                # the boss bubble with "SendMessage..." via _tool_to_thought.
+                return
+
+        # Persist the (potentially rewritten) event under the correct session_id.
+        # Skip if already persisted (lead SESSION_START with team_name).
+        if not (team_name and not teammate_name and event.event_type == EventType.SESSION_START):
+            await self._persist_event(event)
 
         if event.session_id not in self.sessions:
             await self._restore_session(event.session_id)
@@ -261,10 +465,24 @@ class EventProcessor:
                 ("task_description", "taskDescription"),
                 ("agent_name", "agentName"),
                 ("prompt", "prompt"),
+                ("teammate_name", "teammateName"),
+                ("message_to", "messageTo"),
+                ("message_text", "messageText"),
             ]:
                 val = getattr(event.data, src, None)
                 if val is not None:
                     detail[dst] = val
+
+        # For TEAMMATE_MESSAGE, resolve recipientId from the state machine
+        if event.event_type == EventType.TEAMMATE_MESSAGE and event.data and event.data.message_to:
+            recipient_id_for_detail = sm.find_agent_by_teammate_name(event.data.message_to)
+            if recipient_id_for_detail:
+                detail["recipientId"] = recipient_id_for_detail
+            # Also include sender's display name and color
+            sender = sm.agents.get(agent_id)
+            if sender:
+                detail["agentName"] = sender.name or agent_id
+                detail["agentColor"] = sender.color
 
         event_dict: HistoryEntry = {
             "id": str(event.timestamp.timestamp()),
@@ -352,6 +570,41 @@ class EventProcessor:
         # ------------------------------------------------------------------
         if event.event_type == EventType.USER_PROMPT_SUBMIT:
             await handle_user_prompt_submit(sm, event, agent_id)
+
+        # ------------------------------------------------------------------
+        # TEAMMATE_MESSAGE — add to conversation
+        # ------------------------------------------------------------------
+        if event.event_type == EventType.TEAMMATE_MESSAGE and event.data:
+            sender_agent_id = event.data.agent_id or "unknown"
+            sender_agent = sm.agents.get(sender_agent_id)
+            recipient_name = event.data.message_to or "unknown"
+            recipient_id = sm.find_agent_by_teammate_name(recipient_name)
+
+            sender_name = (
+                "Team Lead"
+                if sender_agent_id == "main"
+                else (sender_agent.name or "unknown")
+                if sender_agent
+                else (event.data.teammate_name or "unknown")
+            )
+            sender_color = sender_agent.color if sender_agent else "#f97316"
+            # Resolve recipient display name from their agent (consistent with desk label)
+            recipient_agent = sm.agents.get(recipient_id) if recipient_id else None
+            resolved_recipient_name = (
+                (recipient_agent.name or recipient_name) if recipient_agent else recipient_name
+            )
+            msg_entry = ConversationEntry(
+                id=str(event.timestamp.timestamp()),
+                role="team_message",
+                agentId=sender_agent_id,
+                text=event.data.message_text or "",
+                timestamp=event.timestamp.isoformat(),
+                agentName=sender_name,
+                agentColor=sender_color,
+                recipientId=recipient_id or "",
+                recipientName=resolved_recipient_name,
+            )
+            sm.conversation.append(msg_entry)
 
         # ------------------------------------------------------------------
         # PRE_TOOL_USE
@@ -579,6 +832,9 @@ class EventProcessor:
                 AgentState.WAITING,
             ]:
                 sm.agents[agent_id].bubble = None
+            # Remove from arrival queue when agent moves to desk
+            if state == AgentState.WALKING_TO_DESK and agent_id in sm.arrival_queue:
+                sm.arrival_queue.remove(agent_id)
             await broadcast_state(session_id, sm)
 
     async def _start_beads_if_available(self, session_id: str) -> None:
@@ -684,6 +940,19 @@ class EventProcessor:
                 task_id_short = task_id[:7] if len(task_id) > 7 else task_id
                 summary_short = (summary[:40] + "...") if len(summary) > 40 else summary
                 return f"Background task {task_id_short} {status}: {summary_short}"
+            case EventType.TEAMMATE_MESSAGE:
+                sender = data.teammate_name or "Unknown"
+                recipient = data.message_to or "Unknown"
+                snippet = (data.message_text or "")[:30]
+                if len(data.message_text or "") > 30:
+                    snippet += "..."
+                return f"{sender} → {recipient}: {snippet}"
+            case EventType.TEAMMATE_IDLE:
+                return f"{data.teammate_name or 'Teammate'} finished their turn"
+            case EventType.TASK_COMPLETED:
+                subject = data.task_subject or "a task"
+                name = data.teammate_name or "Someone"
+                return f"{name} completed: {subject}"
             case _:
                 return f"Event: {event.event_type}"
 

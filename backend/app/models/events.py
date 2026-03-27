@@ -36,6 +36,9 @@ class EventType(StrEnum):
     LEAVING = "leaving"
     ERROR = "error"
     BACKGROUND_TASK_NOTIFICATION = "background_task_notification"
+    TEAMMATE_MESSAGE = "teammate_message"
+    TEAMMATE_IDLE = "teammate_idle"
+    TASK_COMPLETED = "task_completed"
 
 
 class EventData(BaseModel):
@@ -76,6 +79,15 @@ class EventData(BaseModel):
     background_task_summary: str | None = None
     # Task list override (from CLAUDE_CODE_TASK_LIST_ID env var)
     task_list_id: str | None = None
+    # Agent Teams fields
+    team_name: str | None = None
+    teammate_name: str | None = None
+    message_to: str | None = None  # SendMessage recipient
+    message_text: str | None = None  # SendMessage content
+    task_id: str | None = None  # TaskCompleted task ID
+    task_subject: str | None = None  # TaskCompleted subject
+    is_teammate: bool | None = None  # True for teammate SUBAGENT_START
+    model: str | None = None  # Model ID (e.g. "claude-opus-4-6")
 
 
 class Event(BaseModel):

@@ -93,6 +93,10 @@ def _handle_session_start(raw_data: dict[str, Any], data: dict[str, Any]) -> Non
     """Populate *data* for a session_start event."""
     source = raw_data.get("source", "unknown")
     data["summary"] = f"Session started ({source})"
+    # Pass model ID so backend can set correct context window size
+    model = raw_data.get("model")
+    if model:
+        data["model"] = model
 
 
 def _handle_pre_compact(payload: dict[str, Any], data: dict[str, Any]) -> None:
@@ -126,6 +130,14 @@ def _handle_pre_tool_use(
             data["task_description"] = prompt if prompt else description
             if agent_type:
                 data["agent_type"] = agent_type
+            # Agent Teams: pass team_name and teammate name from tool_input
+            input_team_name: str = tool_input.get("team_name", "")
+            input_name: str = tool_input.get("name", "")
+            if input_team_name:
+                data["team_name"] = input_team_name
+            if input_name:
+                data["teammate_name"] = input_name
+                data["agent_name"] = input_name
         else:
             data["task_description"] = str(tool_input_raw) if tool_input_raw else ""
         # Remove raw tool_input — we've extracted what we need
@@ -148,11 +160,24 @@ def _handle_post_tool_use(
 
     if data["tool_name"] in ("Task", "Agent"):
         tool_input_raw = raw_data.get("tool_input", {})
+        tool_response_raw = raw_data.get("tool_response", {})
         is_background = False
+        is_teammate_spawn = False
         if isinstance(tool_input_raw, dict):
             is_background = bool(tool_input_raw.get("run_in_background"))
+        if isinstance(tool_response_raw, dict):
+            is_teammate_spawn = tool_response_raw.get("status") == "teammate_spawned"
 
-        if is_background:
+        if is_teammate_spawn:
+            # Agent Teams: teammate was spawned — this is NOT a subagent_stop.
+            # Keep as post_tool_use so it doesn't trigger departure animation.
+            data["agent_id"] = "main"
+            resp = cast(dict[str, Any], tool_response_raw)
+            if resp.get("team_name"):
+                data["team_name"] = resp["team_name"]
+            if resp.get("name"):
+                data["teammate_name"] = resp["name"]
+        elif is_background:
             # Background agent — let native SubagentStop handle completion
             data["agent_id"] = "main"
         else:
@@ -332,6 +357,15 @@ def map_event(
     if task_list_id:
         data["task_list_id"] = task_list_id
 
+    # Agent Teams context
+    team_name = os.environ.get("CLAUDE_CODE_TEAM_NAME")
+    if team_name:
+        data["team_name"] = team_name
+
+    teammate_name = raw_data.get("agent_name") or os.environ.get("CLAUDE_CODE_AGENT_NAME")
+    if teammate_name:
+        data["teammate_name"] = teammate_name
+
     payload: dict[str, Any] = {
         "event_type": event_type,
         "session_id": actual_session_id,
@@ -381,5 +415,15 @@ def map_event(
 
     elif event_type == "session_end":
         _handle_session_end(raw_data, data)
+
+    elif event_type == "teammate_idle":
+        data["teammate_name"] = raw_data.get("teammate_name")
+        data["team_name"] = raw_data.get("team_name")
+
+    elif event_type == "task_completed":
+        data["task_id"] = raw_data.get("task_id")
+        data["task_subject"] = raw_data.get("task_subject")
+        data["teammate_name"] = raw_data.get("teammate_name")
+        data["team_name"] = raw_data.get("team_name")
 
     return payload

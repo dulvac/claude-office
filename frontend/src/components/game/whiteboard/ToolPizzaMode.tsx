@@ -30,6 +30,7 @@ export function ToolPizzaMode({ toolUsage }: ToolPizzaModeProps): ReactNode {
 
   const drawPizza = useCallback(
     (g: Graphics) => {
+      if (!g) return;
       g.clear();
       const cx = 80;
       const cy = 55;
@@ -85,6 +86,7 @@ export function ToolPizzaMode({ toolUsage }: ToolPizzaModeProps): ReactNode {
           <pixiContainer key={category} y={i * 16}>
             <pixiGraphics
               draw={(g: Graphics) => {
+                if (!g) return;
                 g.clear();
                 g.rect(0, 0, 10, 10);
                 g.fill(PIZZA_COLORS[category] ?? 0x6b7280);

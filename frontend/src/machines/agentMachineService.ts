@@ -91,6 +91,7 @@ class AgentMachineService {
     options?: {
       backendState?: string;
       skipArrival?: boolean;
+      walkToDesk?: boolean;
       queueType?: "arrival" | "departure";
       queueIndex?: number;
     },
@@ -131,6 +132,8 @@ class AgentMachineService {
         options.queueIndex,
         store,
       );
+    } else if (options?.walkToDesk && desk) {
+      this.spawnWalkToDesk(actor, agentId, name, desk, initialPosition, store);
     } else if (options?.skipArrival && desk) {
       this.spawnAtDesk(actor, agentId, name, desk, store);
     } else {
@@ -326,6 +329,35 @@ class AgentMachineService {
     store.updateAgentPhase(agentId, "idle");
   }
 
+  /**
+   * Spawn a teammate at an elevator position and walk them to their desk.
+   * No queue/boss choreography — just a direct walk.
+   */
+  private spawnWalkToDesk(
+    actor: ReturnType<typeof createActor>,
+    agentId: string,
+    name: string | null,
+    desk: number,
+    elevatorPosition: Position,
+    store: ReturnType<typeof useGameStore.getState>,
+  ): void {
+    const deskPosition = getDeskPosition(desk);
+    // Set the machine to idle (at desk) for state purposes
+    actor.send({
+      type: "SPAWN_AT_DESK",
+      agentId,
+      name,
+      desk,
+      position: deskPosition,
+    });
+    // But keep the visual position at the elevator and walk to desk
+    store.updateAgentPosition(agentId, elevatorPosition);
+    store.updateAgentTarget(agentId, deskPosition);
+    store.updateAgentPhase(agentId, "idle");
+    // Start pathfinding to desk
+    animationSystem.setAgentPath(agentId, deskPosition);
+  }
+
   private spawnFromElevator(
     actor: ReturnType<typeof createActor>,
     agentId: string,
@@ -505,6 +537,22 @@ class AgentMachineService {
       console.log(
         `[AgentMachineService] Skipping boss bubble "${text.slice(0, 30)}..." - isCompleting=${isCompleting}, hasPersistentBubble=${hasPersistentBubble}`,
       );
+      // Even though we skip the bubble display, we must still fire
+      // BUBBLE_DISPLAYED so the XState arrival/departure conversation
+      // flow doesn't freeze waiting for a bubble that will never show.
+      // Find whichever agent is currently conversing with the boss.
+      for (const [agentId] of this.agents) {
+        const agent = store.agents.get(agentId);
+        if (
+          agent &&
+          (agent.phase === "conversing" ||
+            agent.phase === "walking_to_boss" ||
+            agent.phase === "at_boss")
+        ) {
+          setTimeout(() => this.notifyBubbleComplete(agentId), 50);
+          break;
+        }
+      }
       return;
     }
 

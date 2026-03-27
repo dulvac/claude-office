@@ -26,6 +26,7 @@ export interface BossSpriteProps {
   bubble: BubbleContent | null;
   inUseBy: "arrival" | "departure" | null;
   currentTask: string | null;
+  label?: string;
   chairTexture: Texture | null;
   deskTexture: Texture | null;
   keyboardTexture: Texture | null;
@@ -192,6 +193,7 @@ function BossSpriteComponent({
   bubble,
   inUseBy: _inUseBy,
   currentTask,
+  label = "Claude",
   chairTexture,
   deskTexture,
   keyboardTexture,
@@ -346,7 +348,7 @@ function BossSpriteComponent({
       {!isAway && (
         <pixiContainer y={-63} scale={0.5}>
           <pixiText
-            text="Claude"
+            text={label}
             anchor={0.5}
             style={{
               fontFamily: "monospace",

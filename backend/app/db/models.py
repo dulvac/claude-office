@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.database import Base
@@ -93,3 +93,27 @@ class UserPreference(Base):
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
     )
+
+
+class TeamRecord(Base):
+    """Database model for Agent Teams."""
+
+    __tablename__ = "team_records"
+
+    team_name: Mapped[str] = mapped_column(String, primary_key=True)
+    lead_session_id: Mapped[str] = mapped_column(String)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+
+class TeamMemberRecord(Base):
+    """Database model for Agent Team members."""
+
+    __tablename__ = "team_members"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    team_name: Mapped[str] = mapped_column(String, ForeignKey("team_records.team_name"))
+    teammate_name: Mapped[str] = mapped_column(String)
+    teammate_session_id: Mapped[str] = mapped_column(String)
+    agent_id: Mapped[str] = mapped_column(String)

@@ -29,6 +29,10 @@ class ConversationEntry(TypedDict):
     text: str
     timestamp: str
     toolName: NotRequired[str]  # Only set for "tool" role entries
+    agentName: NotRequired[str]  # Human-readable teammate name
+    agentColor: NotRequired[str]  # Agent color for UI badge
+    recipientId: NotRequired[str]  # For team_message: target agent ID
+    recipientName: NotRequired[str]  # For team_message: target display name
 
 
 class AgentLifespan(BaseModel):

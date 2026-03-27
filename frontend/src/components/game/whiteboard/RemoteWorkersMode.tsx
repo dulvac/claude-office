@@ -33,6 +33,7 @@ export function RemoteWorkersMode({ data }: RemoteWorkersModeProps): ReactNode {
   const tasks = backgroundTasks.slice(0, 6);
 
   const drawVideoGrid = useCallback((g: Graphics) => {
+    if (!g) return;
     g.clear();
 
     // Draw 3x2 grid of video call tiles
@@ -102,6 +103,7 @@ export function RemoteWorkersMode({ data }: RemoteWorkersModeProps): ReactNode {
               x={-40}
               y={-18}
               draw={(g: Graphics) => {
+                if (!g) return;
                 g.clear();
                 g.circle(0, 0, 4);
                 g.fill(getStatusColor(task.status));

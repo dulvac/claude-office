@@ -86,6 +86,7 @@ out/
 !.env.example
 
 # --- Claude / AI Assistant ---
+.claude/settings.local.json
 .gemini/
 claude_scratch/
 *-mcp.json

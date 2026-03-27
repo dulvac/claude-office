@@ -54,8 +54,10 @@ try:
             with urllib.request.urlopen(req, timeout=TIMEOUT) as response:
                 if response.status >= 300:
                     pass  # Silently fail — never disrupt the user
-        except Exception:
-            pass
+        except Exception as exc:
+            from claude_office_hooks.debug_logger import log_error
+
+            log_error(exc, f"POST to {API_URL} failed")
 
     def main() -> None:
         """Parse arguments, read stdin, map the event, and POST to backend."""

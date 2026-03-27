@@ -108,6 +108,7 @@ export function StonksMode({ data }: StonksModeProps): ReactNode {
             x={170}
             y={8}
             draw={(g: Graphics) => {
+              if (!g) return;
               g.clear();
               g.moveTo(0, 5);
               for (let j = 0; j < 8; j++) {

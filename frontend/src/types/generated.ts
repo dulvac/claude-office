@@ -40,6 +40,12 @@ export type Text = string;
 export type Icon = string | null;
 export type Persistent = boolean;
 export type Currenttask = string | null;
+export type Isteammate = boolean;
+export type Id1 = string;
+export type Name1 = string | null;
+export type Toolname = string | null;
+export type State = string;
+export type Desksubagents = DeskSubagent[];
 export type Agentid = string;
 export type Agentname = string;
 export type Color1 = string;
@@ -90,12 +96,16 @@ export type Timestamp = string;
  * Human-readable relative time (e.g., '2 hours ago')
  */
 export type RelativeTime = string;
-export type Id1 = string;
+export type Id2 = string;
 export type Role = string;
 export type Agentid1 = string;
 export type Text1 = string;
 export type Timestamp1 = string;
-export type Toolname = string;
+export type Toolname1 = string;
+export type Agentname1 = string;
+export type Agentcolor = string;
+export type Recipientid = string;
+export type Recipientname = string;
 /**
  * Visual states for the elevator.
  *
@@ -129,7 +139,10 @@ export type EventType =
   | "waiting"
   | "leaving"
   | "error"
-  | "background_task_notification";
+  | "background_task_notification"
+  | "teammate_message"
+  | "teammate_idle"
+  | "task_completed";
 export type SessionId = string;
 export type Timestamp2 = string;
 export type ProjectName = string | null;
@@ -168,6 +181,12 @@ export type BackgroundTaskOutputFile = string | null;
 export type BackgroundTaskStatus = string | null;
 export type BackgroundTaskSummary = string | null;
 export type TaskListId = string | null;
+export type TeamName = string | null;
+export type TeammateName = string | null;
+export type MessageTo = string | null;
+export type MessageText = string | null;
+export type TaskSubject = string | null;
+export type IsTeammate = boolean | null;
 export type Filepath = string;
 export type Editcount = number;
 export type Sessionid = string;
@@ -185,7 +204,7 @@ export type Contextutilization = number;
 export type Toolusessincecompaction = number;
 export type Printreport = boolean;
 export type Lastupdated = string;
-export type Id2 = string;
+export type Id3 = string;
 export type Type = string;
 export type Agentid2 = string;
 export type Summary2 = string;
@@ -257,7 +276,7 @@ export type RepoPath = string;
  * via the `definition` "PhoneState".
  */
 export type PhoneState1 = "idle" | "ringing" | "in_use";
-export type Id3 = string;
+export type Id4 = string;
 export type CreatedAt = string;
 export type UpdatedAt = string;
 export type Status1 = string;
@@ -284,6 +303,8 @@ export interface Agent {
   bubble?: BubbleContent | null;
   currentTask?: Currenttask;
   position?: Position;
+  isTeammate?: Isteammate;
+  deskSubagents?: Desksubagents;
   [k: string]: unknown;
 }
 /**
@@ -301,6 +322,19 @@ export interface BubbleContent {
 }
 export interface Position {
   [k: string]: number;
+}
+/**
+ * A subagent spawned by a teammate, shown as an indicator at their desk.
+ *
+ * This interface was referenced by `ClaudeOfficeBackendTypes`'s JSON-Schema
+ * via the `definition` "DeskSubagent".
+ */
+export interface DeskSubagent {
+  id: Id1;
+  name?: Name1;
+  toolName?: Toolname;
+  state: State;
+  [k: string]: unknown;
 }
 /**
  * Timeline entry for agent lifespan tracking.
@@ -379,12 +413,16 @@ export interface Commit {
  * via the `definition` "ConversationEntry".
  */
 export interface ConversationEntry {
-  id: Id1;
+  id: Id2;
   role: Role;
   agentId: Agentid1;
   text: Text1;
   timestamp: Timestamp1;
-  toolName?: Toolname;
+  toolName?: Toolname1;
+  agentName?: Agentname1;
+  agentColor?: Agentcolor;
+  recipientId?: Recipientid;
+  recipientName?: Recipientname;
   [k: string]: unknown;
 }
 /**
@@ -440,6 +478,12 @@ export interface EventData {
   background_task_status?: BackgroundTaskStatus;
   background_task_summary?: BackgroundTaskSummary;
   task_list_id?: TaskListId;
+  team_name?: TeamName;
+  teammate_name?: TeammateName;
+  message_to?: MessageTo;
+  message_text?: MessageText;
+  task_subject?: TaskSubject;
+  is_teammate?: IsTeammate;
   [k: string]: unknown;
 }
 /**
@@ -507,7 +551,7 @@ export interface OfficeState {
  * via the `definition` "HistoryEntry".
  */
 export interface HistoryEntry {
-  id: Id2;
+  id: Id3;
   type: Type;
   agentId: Agentid2;
   summary: Summary2;
@@ -601,7 +645,7 @@ export interface GitStatus {
  * via the `definition` "Session".
  */
 export interface Session {
-  id: Id3;
+  id: Id4;
   created_at: CreatedAt;
   updated_at: UpdatedAt;
   status: Status1;

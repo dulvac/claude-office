@@ -107,8 +107,21 @@ export function useWebSocketEvents({
           let queueType: "arrival" | "departure" | undefined;
           let queueIndex: number | undefined;
 
-          if (backendAgent.state === "arriving") {
-            // Agent is still arriving - spawn from elevator
+          // Track whether this is a teammate walking from elevator to desk
+          let walkToDesk = false;
+
+          if (backendAgent.isTeammate && backendAgent.desk) {
+            if (backendAgent.state === "arriving") {
+              // Teammate live arrival: spawn at elevator, walk to desk
+              spawnPosition = getNextSpawnPosition();
+              walkToDesk = true;
+            } else {
+              // Teammate session restore: already at desk
+              spawnPosition = getDeskPosition(backendAgent.desk);
+              skipArrival = true;
+            }
+          } else if (backendAgent.state === "arriving") {
+            // Regular subagent arriving - full queue/boss animation
             spawnPosition = getNextSpawnPosition();
           } else if (isInArrivalQueue) {
             // Agent is in arrival queue (not arriving) - spawn at their queue position
@@ -154,6 +167,7 @@ export function useWebSocketEvents({
             {
               backendState: backendAgent.state,
               skipArrival,
+              walkToDesk,
               queueType,
               queueIndex,
             },
@@ -170,6 +184,12 @@ export function useWebSocketEvents({
             backendState: backendAgent.state,
             name: backendAgent.name ?? null,
             currentTask: backendAgent.currentTask ?? null,
+            deskSubagents: (backendAgent.deskSubagents ?? []).map((s) => ({
+              id: s.id,
+              name: s.name ?? null,
+              toolName: s.toolName ?? null,
+              state: s.state,
+            })),
           });
 
           // Enqueue bubbles for agents who are at their desk working
@@ -370,6 +390,22 @@ export function useWebSocketEvents({
               // Trigger compaction animation on context_compaction event
               if (message.event.type === "context_compaction") {
                 useGameStore.getState().triggerCompaction();
+              }
+
+              // Enqueue listening bubble on message recipient
+              if (message.event.type === "teammate_message") {
+                const detail = message.event.detail;
+                const recipientId = detail?.recipientId as
+                  | string
+                  | undefined;
+                const senderName = detail?.agentName as string | undefined;
+                if (recipientId && senderName) {
+                  enqueueBubble(recipientId, {
+                    type: "thought",
+                    text: `Listening to ${senderName}...`,
+                    icon: "👂",
+                  });
+                }
               }
             }
             break;

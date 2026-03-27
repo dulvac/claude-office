@@ -11,7 +11,7 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 API_URL = "http://localhost:8000/api/v1/events"
-TIMEOUT = 0.5  # Seconds — keep short so hooks never block Claude
+TIMEOUT = 2.0  # Seconds — allow time for backend to process large payloads
 
 # ---------------------------------------------------------------------------
 # Config file location

@@ -322,18 +322,26 @@ export const AgentHeadset = memo(AgentHeadsetComponent);
 export interface AgentLabelProps {
   name: string;
   position: Position;
+  deskSubagentCount?: number;
 }
 
-function AgentLabelComponent({ name, position }: AgentLabelProps): ReactNode {
+function AgentLabelComponent({
+  name,
+  position,
+  deskSubagentCount = 0,
+}: AgentLabelProps): ReactNode {
+  const displayText =
+    deskSubagentCount > 0 ? `${name}  +${deskSubagentCount}` : name;
+
   return (
     <pixiContainer x={position.x} y={position.y - 70} scale={0.5}>
       <pixiText
-        text={name}
+        text={displayText}
         anchor={0.5}
         style={{
           fontFamily: "monospace",
           fontSize: 24,
-          fill: 0xffffff,
+          fill: deskSubagentCount > 0 ? 0xfbbf24 : 0xffffff,
           fontWeight: "bold",
           stroke: { width: 4, color: 0x000000 },
         }}
@@ -344,6 +352,70 @@ function AgentLabelComponent({ name, position }: AgentLabelProps): ReactNode {
 }
 
 export const AgentLabel = memo(AgentLabelComponent);
+
+// ============================================================================
+// DESK SUBAGENT INDICATORS (small dots below agent showing active subagents)
+// ============================================================================
+
+export interface DeskSubagentIndicatorsProps {
+  position: Position;
+  subagents: { id: string; name: string | null; state: string }[];
+}
+
+function DeskSubagentIndicatorsComponent({
+  position,
+  subagents,
+}: DeskSubagentIndicatorsProps): ReactNode {
+  if (subagents.length === 0) return null;
+
+  const maxVisible = 3;
+  const visible = subagents.slice(0, maxVisible);
+  const overflow = subagents.length - maxVisible;
+  const totalWidth = visible.length * 12 + (overflow > 0 ? 16 : 0);
+  const startX = -totalWidth / 2;
+
+  const drawDots = useCallback(
+    (g: Graphics) => {
+      g.clear();
+      visible.forEach((sub, i) => {
+        const x = startX + i * 12;
+        const color = sub.state === "working" ? 0xf59e0b : 0x10b981;
+        // Outer glow
+        g.circle(x, 0, 5).fill({ color, alpha: 0.3 });
+        // Inner dot
+        g.circle(x, 0, 3).fill({ color, alpha: 1.0 });
+      });
+      if (overflow > 0) {
+        const x = startX + visible.length * 12;
+        g.circle(x, 0, 3).fill({ color: 0x64748b, alpha: 0.8 });
+      }
+    },
+    [visible, startX, overflow],
+  );
+
+  return (
+    <pixiContainer x={position.x} y={position.y + 20}>
+      <pixiGraphics draw={drawDots} />
+      {overflow > 0 && (
+        <pixiContainer scale={0.5}>
+          <pixiText
+            text={`+${overflow}`}
+            anchor={{ x: 0, y: 0.5 }}
+            x={(startX + visible.length * 12) * 2 + 12}
+            style={{
+              fontFamily: "monospace",
+              fontSize: 16,
+              fill: 0x94a3b8,
+            }}
+            resolution={2}
+          />
+        </pixiContainer>
+      )}
+    </pixiContainer>
+  );
+}
+
+export const DeskSubagentIndicators = memo(DeskSubagentIndicatorsComponent);
 
 export const AgentSprite = memo(AgentSpriteComponent);
 

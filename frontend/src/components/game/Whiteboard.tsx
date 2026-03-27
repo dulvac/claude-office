@@ -114,6 +114,7 @@ function WhiteboardFrame({
             key={i}
             x={(i - 5) * 10}
             draw={(g: Graphics) => {
+              if (!g) return;
               g.clear();
               g.circle(0, 0, i === mode ? 4 : 2);
               g.fill(i === mode ? 0x3b82f6 : 0x9ca3af);
